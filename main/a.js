@@ -1,4 +1,3 @@
-/*A js, copyright Pierre Lang (c) 2024, a-js-infos@pierre-lang.info */
 (function(win,doc) {
 	let AObjectNames = "A";
 	
@@ -98,6 +97,9 @@
 		AInitializedPromiseResolve = resolve
 		AInitializedPromiseReject = reject
 	})
+	
+	let AFirstRunTime = Date.now();
+	let AFirstRuntimeCleanDelay = 30000;
 	
 	function updateAConfig() {
 		let confText = getSourceContent(A.script).txt;
@@ -487,6 +489,68 @@
 	} 
 	A.__private.getGlobalObject = getGlobalObject;
 	
+	function getGlobalObjectsOrphans() {
+		let res = {};
+		for (let key in globalObjects) {
+			let obj = globalObjects[key]
+			if (obj.parentElement==null&&!obj.__AGOOrphansIgnore) {
+				res[key] = obj;
+			}
+		}
+		return res;
+	}
+	A.__private.getGlobalObjectsOrphans = getGlobalObjectsOrphans;
+	
+	function cleanGlobalObjectsOrphans(orph) {
+		if (orph==undefined) orph = getGlobalObjectsOrphans()
+		for (let key in orph) {
+			deleteGlobalObject(key)
+		}
+	}
+	A.__private.cleanGlobalObjectsOrphans = cleanGlobalObjectsOrphans;
+	
+	function deleteGlobalObject(key) {
+		if (key==undefined) return;
+		if (typeof(key)=="object") {
+			if (key[APrivateDataKeyWords._aID]!=undefined) {
+				key = key[APrivateDataKeyWords._aID];
+			} else {
+				if (key instanceof HTMLElement) {
+					return key.remove();
+				}
+				return;
+			}
+		}
+		key = "" + key;
+		let obj = getGlobalObject(key);
+		let ret = obj;
+		if (!obj) return;
+		if (obj.parentElement) {
+			ret = obj.remove();
+		}
+		let aw = getAWatched(obj)
+		for (let i=0;i<aw.length;i++) {
+			let f = aw[i]
+			let evtchangefs = f.evtchangefs;
+			for (let keyc in evtchangefs) {
+				let o = evtchangefs[keyc]
+				o.obj.removeEventListener(keyc + " change",o.evtf);
+			}
+		}
+		let as = getAScripts(obj);
+		for (let i=0;i<as.length;i++) {
+			let s = as[i]
+			deleteGlobalObject(s);
+		}
+		let pv = getPrivate(obj);
+		deleteGlobalObject(pv.__script);
+		
+		delete globalObjects[key];
+		return ret;
+	}
+	A.__private.deleteGlobalObject = deleteGlobalObject;
+	A.deleteGlobalObject = deleteGlobalObject;
+	A.removeGlobalObject = deleteGlobalObject;
 	
 	var globalSharedObjects = {}
 	var namespaceSharedObjects = {}
@@ -1035,6 +1099,17 @@
 		return ascripts;
 	}
 	A.__private.getAScripts = getAScripts;
+	
+	function getAWatched(currentElement) {
+		let pv = getPrivate(currentElement);
+		let awatched = pv.__awatched
+		if (!awatched) {
+			awatched = [];
+			pv.__awatched = awatched;
+		}
+		return awatched;
+	}
+	A.__private.getAWatched = getAWatched;
 	
 	function getAKeyedElements(currentElement,namespace) {
 		let pv = getPrivate(currentElement);
@@ -1678,7 +1753,6 @@
 	A.getSourceContent = getSourceContent
 
 	let getABaseElementsIgnoreAttributes = {
-		"type" : true,
 		"closure" : true
 	}
 
@@ -1712,8 +1786,12 @@
 		let __privateWatchedInfosmem = __privateWatchedInfos;
 		__privateWatchedInfos = {};
 		let evtchangefs = f.evtchangefs || {}; 
+		if (addevent===false) {
+			evtchangefs = {};
+		}
 		let result = f(); 
 		let ce = currentElement;
+		let aw = window[_defaultAObjectName].__private.getAWatched(ce);
 		for (let key in __privateWatchedInfos) { 
 			(function() {
 				let lce = ce;
@@ -1737,16 +1815,22 @@
 						setTimeout(function() {
 							if (lce.parentElement==null) {
 								__privateWatchedInfos[key].evtobj.removeEventListener(key + ' change',evtf);
+								delete evtchangefs[key];
 							}
 						},watchCleanEventDelay)
 					} 
 				};
-				if (addevent!==false) __privateWatchedInfos[key].evtobj.addEventListener(key + ' change',evtf); 
-				evtchangefs[key] = {evtf : evtf, obj :  __privateWatchedInfos[key].evtobj}
+				if (!evtchangefs[key]) {
+					if (addevent!==false)__privateWatchedInfos[key].evtobj.addEventListener(key + ' change',evtf); 
+					evtchangefs[key] = {evtf : evtf, obj :  __privateWatchedInfos[key].evtobj}
+				}
 			} )() 
 		}; 
 		__privateWatchedInfos = __privateWatchedInfosmem;
-		f.evtchangefs = evtchangefs; 
+		if (addevent!==false) {
+			f.evtchangefs = evtchangefs; 
+			aw.push(f);
+		}
 		return {result, evtchangefs}; 
 	};
 	var watchBody = getFunctionBody(watch).replace(/watchCleanEventDelay/g,watchCleanEventDelay).replace(/__privateWatchedInfos/g,__privateWatchedInfosName).replace(/\n|\r/g,"").replace(/([\t]|\s+)/g," ").replace(/;+/g,";");
@@ -1762,6 +1846,7 @@
 			script.async = false;
 		}
 		let ATarget = getAElementTarget(htmlAElement)
+		ATarget.remove = (function() {let oremove = ATarget.remove; return  function remove() { this.remove = oremove; deleteGlobalObject(this);}})()
 		let pv = getPrivate(htmlAElement);
 		if (!pv.__ascriptadded) {
 			getAScripts(ATarget).push(htmlAElement);
@@ -1769,6 +1854,9 @@
 		}
 		
 		pv.__ATarget = ATarget;
+		pv.__script = script;
+		getPrivate(script).__source = htmlAElement;
+		script.__AGOOrphansIgnore = true;
 		
 		if (addclass||addclass==undefined) ATarget.classList.add(A._rndAElementClass);
 		let ATargetAId = addGlobalObject(ATarget);
@@ -1970,11 +2058,14 @@
 	
 	}
 
-
+	let cleanGlobalObjectsOrphansId = -1;
 	function parseAScript(element,addclass,addclosure,options) {
 		element.classList.add(A._rndANotParsedClass);
 		if (addclass==undefined) addclass = false;
 		if (addclosure==undefined) addclosure = false;
+		if (cleanGlobalObjectsOrphansId<0&&AFirstRuntimeCleanDelay>=0&&(Date.now()-AFirstRunTime)>AFirstRuntimeCleanDelay) {
+			cleanGlobalObjectsOrphansId = setTimeout(() => { cleanGlobalObjectsOrphans(); cleanGlobalObjectsOrphansId = -1},0);
+		}
 		(function(){
 			let laddclass = addclass;
 			let laddclosure = addclosure;
@@ -2027,9 +2118,11 @@
 				if (bdelay) {
 					makeWaitForParentAScriptsExecutionPromise(tagelement,true).then(res => {
 						lelement.parentElement.insertBefore(script,element.nextSibling);
+						delete script.__AGOOrphansIgnore
 					});
 				} else {
 					lelement.parentElement.insertBefore(script,element.nextSibling);
+					delete script.__AGOOrphansIgnore
 				}
 			})
 		})();
