@@ -929,6 +929,7 @@
 				}
 			}
 		}
+		getPrivate(res)._isAElementTarget = true;
 		htmlAElement.__AElementTarget = res;
 		return res;
 	}
@@ -2047,6 +2048,43 @@
 		}
 	}
 
+	function waitUntilAParsedIfExists() {
+		return (function() {
+			let args = []
+			for (let i=0;i<arguments.length;i++) {
+				args.push(argument[i]);
+			}
+			return new Promise((resolve,reject) => {
+				if (args.length==0) {
+					resolve();
+					return;
+				}
+				function wait(count,lastargslength) {
+					do {
+						let cur = args[0];
+						if (cur instanceof HTMLElement) {
+							if (!cur.classList.contains(A._rndANotParsedClass)) {
+								
+							}
+						}
+					} while (args.length>0);
+					if (args.length==0) {
+						resolve();
+						return;
+					} else {
+						if (arg.length==lastargslength) {
+							count++;
+						}
+						if (cout<10000) {
+							setTimeout(() => { wait(count,args.length)},0);
+						} else {
+							reject();
+						}
+					}
+				}
+			})
+		})()
+	}
 
 	class MyACustomTag extends HTMLElement {
 	
@@ -2079,7 +2117,7 @@
 		let pe = element.parentElement;
 		if (pe.classList.contains(A._rndANotParsedClass)||pe.classList.contains(A._rndAParsedClass)) {
 			let pv = getPrivate(pe)
-			if (!pv._isACustomTag)	return; //do not parse inside another AElement. This is full literal creation
+			if (!pv._isACustomTag&&!pv._isAElementTarget)	return; //do not parse inside another AElement. This is full literal creation
 		}
 		element.classList.add(A._rndANotParsedClass);
 		if (addclass==undefined) addclass = false;
