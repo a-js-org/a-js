@@ -429,6 +429,17 @@
 	    return rule;
 	}
 	
+	function getCreatedClassStyleTag() {
+		let res = "";
+		for (rule of createClass._style.sheet.rules) {
+			res += rule.cssText + "\n"
+		}
+		let style = document.createElement("style")
+		style.innerHTML = res;
+		return style;
+	}
+	A.getCreatedClassStyleTag = getCreatedClassStyleTag;
+	
 	function getFunctionBody(f) {
 		if (typeof(f)!="function") {
 			return;
@@ -894,10 +905,12 @@
 		if (res["_parent" + AObjectName0]===undefined) {
 			let pres = res;
 			let stack = [pres];
-			do {
-				pres = pres.parentElement;
-				stack.push(pres)
-			} while(pres["_parent" + AObjectName0]===undefined&&pres[AObjectName0]===undefined&&pres.parentElement!=null)
+			if (pres.parentElement) {//null when added a the shadowRoot
+				do {
+					pres = pres.parentElement;
+					stack.push(pres)
+				} while(pres["_parent" + AObjectName0]===undefined&&pres[AObjectName0]===undefined&&pres.parentElement!=null)
+			}
 			let parent = null;
 			if (pres[AObjectName0]!=undefined) {
 				parent = pres;
@@ -2045,9 +2058,12 @@
 		if (this[A._rndAClass]) {
 			return;
 		}
+		let pv = getPrivate(this)
+		pv._isACustomTag = true;
 		this.classList.add(A._rndANotParsedClass);
 		this[A._rndAClass] = true;
-	    requestAnimationFrame(() => { parseACustomTag(this)});
+		let Athis = this;
+	    requestAnimationFrame(() => { parseACustomTag(Athis)});
 	  }
 	
 	  disconnectedCallback() {
@@ -2060,6 +2076,11 @@
 
 	let cleanGlobalObjectsOrphansId = -1;
 	function parseAScript(element,addclass,addclosure,options) {
+		let pe = element.parentElement;
+		if (pe.classList.contains(A._rndANotParsedClass)||pe.classList.contains(A._rndAParsedClass)) {
+			let pv = getPrivate(pe)
+			if (!pv._isACustomTag)	return; //do not parse inside another AElement. This is full literal creation
+		}
 		element.classList.add(A._rndANotParsedClass);
 		if (addclass==undefined) addclass = false;
 		if (addclosure==undefined) addclosure = false;
@@ -2141,9 +2162,10 @@
 		this[A._rndAClass] = true;
 		this.classList.add(A._rndANotParsedClass);
 		let ATarget = getAElementTarget(this)
+		let Athis = this;
 		ATarget.classList.add(A._rndANotParsedClass);
 		  
-	    requestAnimationFrame(() => { parseAScript(this)});
+	    requestAnimationFrame(() => { parseAScript(Athis)});
 	  }
 	
 	  disconnectedCallback() {
@@ -2167,9 +2189,10 @@
 		this[A._rndAClass] = true;
 		this.classList.add(A._rndANotParsedClass);
 		let ATarget = getAElementTarget(this)
+		let Athis = this;
 		ATarget.classList.add(A._rndANotParsedClass);
 		  
-	    requestAnimationFrame(() => { parseAScript(this,false,true)});
+	    requestAnimationFrame(() => { parseAScript(Athis,false,true)});
 	  }
 	
 	  disconnectedCallback() {
@@ -2192,8 +2215,9 @@
 		}
 		this.classList.add(A._rndANotParsedClass);
 		this[A._rndAClass] = true;
+		let Athis = this;
 		  
-	    requestAnimationFrame(() => { parseAScript(this,false,true,{ tagDef : true})});
+	    requestAnimationFrame(() => { parseAScript(Athis,false,true,{ tagDef : true})});
 	  }
 	
 	  disconnectedCallback() {
