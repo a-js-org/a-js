@@ -10,7 +10,7 @@ a.js is a lightweight and versatile JavaScript Flexwork/library designed for bui
 - Modular and reusable code through `<a-tagDef>`.
 - Allow the redefine web components already declared with **a.js**
 - Seamless integration with HTML and JavaScript ecosystems.
-- **a.js** is licensed under [MIT](license)
+- **a.js** is licensed under [MIT license](LICENSE)
 
 ## getting started
 Download the [a.js source](main/a.js), set a `<script src="path/to/a.js"></script>` in the `<head></head>` of your HTML document, and you are ready to go. All you need is a browser, you don't even need to setup a web server at all.
