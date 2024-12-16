@@ -8,7 +8,7 @@ a.js is a lightweight and versatile JavaScript Flexwork/library designed for bui
 - Enhanced web components for rapid UI development.
 - Reactive variables managed through JavaScript proxies.
 - Modular and reusable code through `<a-tagDef>`.
-- Allow the redefine web components already declared with **a.js**
+- Allow the redefine web components already declared with **a.js** as opposite to vanilla custom elements.
 - Seamless integration with HTML and JavaScript ecosystems.
 - **a.js** is licensed under [MIT license](LICENSE)
 - No parser/parser library needed. **a.js** uses the browser engine to parse its tags.
