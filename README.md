@@ -2,7 +2,7 @@
 ## A developper-first JavaScript Flexwork.
 a.js aims to be a flexwork rather than a framework or a library. You can read the [Flexwork manifesto here](TheFlexworkManifesto.md)
 
-a.js is a lightweight and versatile JavaScript Flexwork/library designed for building reactive and dynamic web components. It extends the power of native web components by introducing custom tags (<a-script>, <a-closure>, and <a-tagDef>) that simplify complex operations such as state management, reactivity, and scoped behavior. These custom tags integrate seamlessly with modern JavaScript, allowing developers to create dynamic user interfaces with ease.
+a.js is a lightweight and versatile JavaScript Flexwork/library designed for building reactive and dynamic web components. It extends the power of native web components by introducing custom tags (`<a-script>`, `<a-closure>`, and `<a-tagDef>`) that simplify complex operations such as state management, reactivity, and scoped behavior. These custom tags integrate seamlessly with modern JavaScript, allowing developers to create dynamic user interfaces with ease.
 
 ## Key Highlights
 - Enhanced web components for rapid UI development.
