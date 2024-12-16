@@ -1,9 +1,12 @@
 (function(win,doc) {
+	if (win._defaultAObjectName) return;
+	
 	let AObjectNames = "A";
 	
 	let A = {
 		__private : {},
-		extend : {}
+		extend : {},
+		version : "0.9"
 	};
 	A._rndAClass = ("A" + Math.random() + "_" + Date.now()).replace(".","");
 	A._rndAElementClass = ("AE" + Math.random() + "_" + Date.now()).replace(".","");
@@ -13,7 +16,7 @@
 	A._rndANotParsedClass = ("ANP" + Math.random() + "_" + Date.now()).replace(".","");
 	A.script = doc.currentScript 
 	
-	__privateWatchedInfosName = ("__pvi" + Math.random()).replace(".","");;
+	let __privateWatchedInfosName = ("__pvi" + Math.random()).replace(".","");;
 	
 	let ACustomElements = {  
 		"AScript" : ["a-script"],
@@ -26,7 +29,8 @@
 	let AElements = {
 		"import" : ["import"],
 		"let" : ["let"],
-		"forEachOf" : ["forEachOf"]
+		"forEachOf" : ["forEachOf"],
+		"globalRunFirst" : ["bootstrap"]
 	}
 
 	let AFunctions = {
@@ -43,14 +47,19 @@
 	
 	let AAttributes = {
 		"forTag" : ["forTag"],
+		"redefine" : ["redefine"],
 		"forAttribute" : ["forAttribute","forAttr"],
 		"attachInternals" : "attachInternals",
 		"key" : "key",
-		"namespace" : "namespace"
+		"namespace" : "namespace",
+		"singleton" : "singleton",
+		"singletonreplace" : "singletonreplace",
+		"waitFor" : "waitFor"
 	}
 	
 	let APrivateDataKeyWords = {
-		_aID : "_aID"
+		_aID : "_aID",
+		_reqaID : "_reqaID"
 	}
 
 	let AStyleClassCounter = 0;
@@ -60,17 +69,26 @@
 		"a/unparsed" : true,
 		"a/u" : true
 	}
+	
+	let AIsInitialized = false;
+	
 	let watchCleanEventDelay = 60000;
 	
 	let addSourceMaps = true;
 	
 	let extendWarns = true;
 	
+	let keepCustomTagsInitState = false;
+	
 	let APromisesWaitForInitialize =  null;
 	
 	let AInnerTagsJobsCloneNode = true;
 	let AInnerTagsJobs = []
 	let TemplateLiteralFullCreationJobs = [];
+	let ACustomTagFirstConnectedJobs = {};
+	let ConnectedJobsByType = {}
+	let AFetch = fetch;
+	let APostImportFetchJobs = []
 	
 	let AConfig = {};
 	
@@ -109,7 +127,7 @@
 		}
 		confText = "(" + confText + ")";
 		let conf = eval(confText);
-		AConfig = conf;
+		updateObject(AConfig,conf);
 		if (conf.AObjectName) {
 			AObjectNames = conf.AObjectName
 		}
@@ -118,6 +136,9 @@
 		}
 		if (conf.addSourceMaps!=undefined) {
 			addSourceMaps = conf.addSourceMaps;
+		}
+		if (conf.keepCustomTagsInitState!==undefined) {
+			keepCustomTagsInitState = conf.keepCustomTagsInitState;
 		}
 	}
 	
@@ -143,7 +164,9 @@
 	        target[key] = target[key] || {};
 	        updateObject(target[key], source[key]);
 	      } else {
-	        target[key] = source[key];
+			if (target[key]!==source[key]) {
+	        	target[key] = source[key];
+	        }
 	      }
 	    }
 	  } else {
@@ -222,6 +245,11 @@
 		forEachKeyWord(name,name => { value = value || element.getAttribute(name)});
 		return value;
 	}
+	function removeAAttribute(element,name) {
+		var value = null;
+		forEachKeyWord(name,name => { element.removeAttribute(name)});
+		return value;
+	}
 	
 	
 	function makeQuerySelectorForKeyWord(keyword,suffix,prefix) {
@@ -253,6 +281,11 @@
 
 	function getJSONPath(obj, tpath, value, remove,datastack, getpathinfoinstead, root) {
     	try {
+			let setval = true;
+			if (remove=="noop")	{
+				remove = false;
+				setval = false;
+			}
 			var dt = obj;
 			if (tpath===null||tpath===undefined) {
 				return dt;
@@ -290,7 +323,7 @@
 				}
 				if (j < tpath.length-1) {
 					if (dt[part]==undefined) {
-						if (value&&!remove) {
+						if (value!==undefined&&!remove) {
 							dt[part] = {};
 						} else {
 							return undefined;
@@ -300,7 +333,9 @@
 				} else {
 					var ret = dt[part];
 					if (value!==undefined&&!remove) {
-						dt[part] = value;
+						if (setval) {
+							dt[part] = value;							
+						}
 					} else {
 						if (remove) {
 							delete dt[part];
@@ -457,10 +492,12 @@
 
 	function extFetch(src) {
 		if (src) {
-			return fetch.apply(this,arguments);
+			return AFetch.apply(this,arguments);
 		} else {
-			return new Promise(() => { 
-				return {ok : true, text : function() { return ""} }
+			return new Promise((resolve) => { 
+					let res = {ok : true, text : function() { return ""}};
+					resolve(res);
+					return res;
 				} 
 			)
 		}
@@ -483,13 +520,38 @@
 	}
 	A.__private.getFromGlobalFunctionsRepository = getFromGlobalFunctionsRepository;
 
+	let singletons = new Map()
+	function singletonExist(name) {
+		return singletons.has(name)
+	}
+	function addSingleton(name,obj) {
+		let existing = singletons.get(name)
+		if (existing) {
+			deleteGlobalObject(existing)
+		}
+		singletons.set(name,obj)
+	}
+	function deleteSingleton(name,obj) {
+		let existing = singletons.get(name)
+		if (existing) {
+			deleteGlobalObject(existing)
+		}
+		singletons.delete(name)
+	}
+
 	let globalObjectsCounter = 0;
 	let globalObjects = {}
 	function addGlobalObject(obj) {
 		if (obj[APrivateDataKeyWords._aID]!=undefined) {
 			return obj[APrivateDataKeyWords._aID]
 		}
-		var count = "" + (globalObjectsCounter++)
+		var count;
+		if (obj[APrivateDataKeyWords._reqaID]!=undefined) {
+			if (!globalObjects[obj[APrivateDataKeyWords._reqaID]]) {
+				count = "" + obj[APrivateDataKeyWords._reqaID]
+			}
+		}
+		if (count==undefined) count = "" + (globalObjectsCounter++)
 		globalObjects[count] = obj;
 		obj[APrivateDataKeyWords._aID] = count;
 		return count;
@@ -504,7 +566,7 @@
 		let res = {};
 		for (let key in globalObjects) {
 			let obj = globalObjects[key]
-			if (obj.parentElement==null&&!obj.__AGOOrphansIgnore) {
+			if (obj.isConnected==false&&!obj.__AGOOrphansIgnore) {
 				res[key] = obj;
 			}
 		}
@@ -527,6 +589,10 @@
 				key = key[APrivateDataKeyWords._aID];
 			} else {
 				if (key instanceof HTMLElement) {
+					let singname = getAAttribute(key,AAttributes.singleton)
+					if (singname) {
+						singletons.delete(singname)
+					}
 					return key.remove();
 				}
 				return;
@@ -537,6 +603,10 @@
 		let ret = obj;
 		if (!obj) return;
 		if (obj.parentElement) {
+			let singname = getAAttribute(obj,AAttributes.singleton)
+			if (singname) {
+				singletons.delete(singname)
+			}
 			ret = obj.remove();
 		}
 		let aw = getAWatched(obj)
@@ -557,6 +627,9 @@
 		deleteGlobalObject(pv.__script);
 		
 		delete globalObjects[key];
+		
+		if (typeof(getA(obj).ondestroy)=='function') { getA(obj).ondestroy() };
+		
 		return ret;
 	}
 	A.__private.deleteGlobalObject = deleteGlobalObject;
@@ -677,7 +750,7 @@
 	A.__private.getNamespaceSharedObject = getNamespaceSharedObject;
 
 	function recurseGetSetProxy(value,evtNamePrefix,obj,target) {
-		if (typeof(value)=='object') {
+		if (typeof(value)=='object'&&value!=null) {
 			value = getSetProxy(evtNamePrefix,value,target)
 			for (key in value) {
 				let val = value[key];
@@ -686,20 +759,46 @@
 		}
 		return value;
 	}
+	
+	function setProxyDelayedDispatchEvents(evtobj,evt) {
+		let ddobj = evtobj.__spddde
+		if (ddobj==undefined) {
+			ddobj = {}
+			evtobj.__spddde = ddobj
+		}
+		if (!evtobj.__spdddetid) {
+			(function() {
+				let obj = ddobj;
+				let levtobj = evtobj
+				levtobj.__spdddetid = setTimeout(function() {
+					delete levtobj.__spddde
+					levtobj.__spdddetid = undefined;
+					delete levtobj.__spdddetid;
+					A.__private.__spdddeobj = {}
+					for (let key in obj) {
+						levtobj.dispatchEvent(obj[key])
+					}
+					delete A.__private.__spdddeobj;
+				},0)
+			})()
+		}
+		ddobj[evt.type] = evt;
+	}
 
 	function getSetProxy(evtNamePrefix,obj,target) {
 		let res = obj;
 		(function(){
+			let origObj = obj;
 			let name = evtNamePrefix;
 			let evtobj = target || document;
 			let handler = {
 				set(obj, prop, value,receiver) {
-					if (typeof(value)=='object') {
+					if (typeof(value)=='object'&&value!==null) {
 						value = recurseGetSetProxy(value,name + "." + prop,value,evtobj)
 					}
 					let res = Reflect.set(obj, prop, value,receiver);
 					var evt = new CustomEvent(name + "." + prop + " change");
-					evtobj.dispatchEvent(evt);	
+					setProxyDelayedDispatchEvents(evtobj,evt);	
 					return res;
 				}
 			}
@@ -744,8 +843,8 @@
 			exposeAStore = window;
 		}
 		if (arg2!=undefined) { 
-			let f = typeof(arg1=='function') ? arg1 : arg2; 
-			let n = typeof(arg1=='function') ? arg2 : arg1; 
+			let f = typeof(arg1)=='function' ? arg1 : arg2; 
+			let n = typeof(arg1)=='function' ? arg2 : arg1; 
 			exposeAStore[n] = f 
 		} else { 
 			exposeAStore[arg1.name] = arg1 
@@ -772,13 +871,15 @@
 		return F; 
 	}; 
 	A.__private.injectFunction = injectFunction;
-	A.__private.injectFunctionBody = getFunctionBody(injectFunction).replace(/expose/g,AFunctions0.expose).replace(/\n|\r/g,"").replace(/([\t]|\s+)/g," ").replace(/;+/g,";");
+	A.__private.injectFunctionBody = getFunctionBody(injectFunction).replace(/expose/g,AFunctions0.expose).replace(/\n|\r/g,"").replace(/([\t]|\s+)/g," ").replace(/;+/g,";").replace(/expose\(injectFunctionAStore,/,"expose(");
 	
 	function checkExtensionScriptRunningOrThrow() {
 		let cs = document.currentScript;
 		if (cs) {
 			if (cs.getAttribute("a-extension")!==null) {
-				return true;
+				if (!AIsInitialized) {
+					return true;
+				}
 			}
 		}
 		throw "Only available during an extension script first run"
@@ -923,7 +1024,7 @@
 					}
 				}
 			}
-			for (elem of stack) {
+			for (let elem of stack) {
 				if (elem!=parent) {
 					elem["_parent" + AObjectName0] = parent;
 				}
@@ -934,7 +1035,7 @@
 		return res;
 	}
 
-	
+	var witnessElem = doc.createElement("span")
 	function getTemplateLiteralFullCreation(elem,watched,allowhtml,counter) {
 		if (counter==undefined) {
 			counter = 0;
@@ -947,6 +1048,9 @@
 		}
 		let jobsInfos = null;
 		let tagName = elem.tagName;
+		if (tagName.startsWith("A:")) {
+			tagName = tagName.substring(2,tagName.length)
+		}
 		if (TemplateLiteralFullCreationJobs.length>0) {
 			let pElem = elem.parentElement;
 			let ps = elem.previousSibling;
@@ -992,7 +1096,7 @@
 			}
 		}
 		let res = "(function f0(){"
-			+ "f0.toString = function(){ return `"+elem.outerHTML.replace(/\r/g,"\\r").replace(/\n/g,"\\n").replace(/</gi,"` + '<' + `")+"`};" 
+			+ "f0.toString = function(){ return `"+elem.outerHTML.replace(/\r/g,"\\r").replace(/\n/g,"\\n").replace(/<a:/gi,"<").replace(/</gi,"` + '<' + `")+"`};" 
 		let keyvalue = getAAttribute(elem,AAttributes.key)
 		let nsvalue = getAAttribute(elem,AAttributes.namespace) 
 		if (nsvalue) {
@@ -1010,13 +1114,13 @@
 		}
 		for (const attr of elem.attributes) {
 			if (attr.name.startsWith("on")) {
-				if (elem[attr.name]!==undefined) {
+				if (witnessElem[attr.name]!==undefined) { //not using elem, as some attributes values may cause error logs when read
 					res += watchstart + ""+name+".setAttribute(`_"+attr.name+"`, `"+attr.value+"`)" + watchend
 				} else {
 					res += watchstart + ""+name+".setAttribute(`"+attr.name+"`, `"+attr.value+"`)" + watchend
 				}
-				res += "let f=currentElement."+AObjectName0+".injectFunction(`function(event) {"+attr.value+"}`,false);"
-				res += ""+name+".addEventListener(`"+attr.name.substring(2)+"`,f);"
+				res += watchstart + "let f=currentElement."+AObjectName0+".injectFunction(`function(event) {"+attr.value+"}`,false);"
+				res += ""+name+".addEventListener(`"+attr.name.substring(2)+"`,f)"+ watchend
 			} else {
 		    	res += watchstart + ""+name+".setAttribute(`"+attr.name+"`, `"+attr.value+"`)" + watchend
 		    }
@@ -1088,8 +1192,18 @@
 		return res;
 	}
 	
+	function getA(currentElement) {
+		let obj = currentElement[AObjectName0];
+		if (!obj) {
+			obj = { __private : { __ascripts : [] }}
+			currentElement[AObjectName0] = obj;
+		}
+		return obj;
+	}
+	A.getA = getA;
+	
 	function getPrivate(currentElement) {
-		let obj = currentElement[AObjectName0]
+		let obj = getA(currentElement)
 		if (!obj) {
 			obj = { __private : { __ascripts : [] }}
 			currentElement[AObjectName0] = obj;
@@ -1102,6 +1216,17 @@
 		return pv;
 	}
 	A.__private.getPrivate = getPrivate;
+	
+	function getAWatchedVars(currentElement) {
+		let pv = getPrivate(currentElement);
+		let awatched = pv.__awatchedvars
+		if (!awatched) {
+			awatched = new Map();
+			pv.__awatchedvars = awatched;
+		}
+		return awatched;
+	}
+	A.__private.getAWatchedVars = getAWatchedVars;
 	
 	function getAScripts(currentElement) {
 		let pv = getPrivate(currentElement);
@@ -1124,6 +1249,17 @@
 		return awatched;
 	}
 	A.__private.getAWatched = getAWatched;
+	
+	function getAImported(currentElement) {
+		let pv = getPrivate(currentElement);
+		let aimp = pv.__aimported
+		if (!aimp) {
+			aimp = { scripts : [], css : [], html : [] };
+			pv.__aimported = aimp;
+		}
+		return aimp;
+	}
+	A.__private.getAImported = getAImported;
 	
 	function getAKeyedElements(currentElement,namespace) {
 		let pv = getPrivate(currentElement);
@@ -1225,13 +1361,26 @@
 				el.setAttribute(AAttributes0.namespace,loopnamespace)
 			}
 			let attr = attributes[0];
-			let obj = attr.name
 			let variable = attr.value;
+			let obj = attr.name
+			if (obj.startsWith("a:")) {
+				let poseq = variable.indexOf("=")
+				if (poseq>0) {
+					obj = variable.substring(0,poseq).trim()
+					variable = variable.substring(poseq+1)
+				}
+			}
+			let tobj = obj.split(/\./g)
 			let txt = "watch(function() {"
 				+ "let ce = " + AObjectName0 + ".__private.getAKeyedElements(currentElement,'"+loopnamespace+"');"
-				+ "for (let key in ce) { let e = ce[key]; let pv = A.__private.getPrivate(e); pv.__keyedkeymem = pv.__keyedkey;delete pv.__keyedkey; };"
+				+ "let namespace='"+loopnamespace+"';"
+				+ "for (let key in ce) { let e = ce[key]; let pv = "+AObjectName0+".__private.getPrivate(e); pv.__keyedkeymem = pv.__keyedkey;delete pv.__keyedkey; };"
 				+ "let obj = " + obj + ";"
-				+ "let loopForEach = 0;"
+				if (tobj.length>1) {
+					txt += "let length = " + obj + ".length || " + obj + ".size;"
+					txt += "let aw = " +AObjectName0+".__private.getAWatchedVars(currentScript); let awo = aw.get("+tobj[0]+");if (awo) obj = awo.obj."+obj.substring(tobj[0].length+1)+";"
+				}
+			txt += "let loopForEach = 0;"
 				+ "if (typeof(obj)=='object'&&typeof(obj.forEach)!=='function') obj = new Map(Object.entries(object));"
 				+ "if (typeof(obj.forEach)!=='function') throw 'Invalid use of "+obj+" in " +AElements0.forEachOf+ ". It of type' + typeof(obj);"
 				+ "obj.forEach(("+variable+") => {"
@@ -1239,9 +1388,30 @@
 					+ getSourceContent(foreach).txt + ";"
 					+ "loopForEach++;"
 				+ "});"
-				+ "for (let key in ce) { let e = ce[key]; let pv = A.__private.getPrivate(e); if (pv.__keyedkeymem!=undefined&&pv.__keyedkey==undefined) { e.remove() } };"
+				+ "for (let key in ce) { let e = ce[key]; let pv = "+AObjectName0+".__private.getPrivate(e); if (pv.__keyedkeymem!=undefined&&pv.__keyedkey==undefined) { e.remove() } };"
 			+"});"
 			foreach.outerHTML = txt;
+		}
+	}
+	
+	var elementGlobalRunFirstSelector;
+	function resolveGlobalRunFirst(element,watch,forcedATarget) {
+		if (elementGlobalRunFirstSelector == undefined) elementGlobalRunFirstSelector =  makeQuerySelectorForKeyWord(AElements.globalRunFirst);
+		let allruns= element.querySelectorAll(elementGlobalRunFirstSelector);
+		for (let i=0;i<allruns.length;i++) {
+				let run = allruns[i]
+				let txt = run.innerHTML
+				let script = document.createElement("script");
+				script.innerHTML = txt;
+				doc.body.appendChild(script)
+				let addlines = "";
+				if (addSourceMaps) {
+					let nbCurLines = run.outerHTML.split(/\n/g).length
+					for (let i=1;i<nbCurLines;i++) {
+						addlines += "\n";
+					}
+				}
+				run.outerHTML = addlines;
 		}
 	}
 	
@@ -1267,7 +1437,7 @@
 			let txt = "";
 			let declare = alldeclares[i];
 			let declareText = getTextContent(declare).txt;
-			let globalsRE = /(^|;|\|\\n})((let|var|const)[ \t]+)*[ \t]*(watched )*[ \t]*(nsG|namespaceG|aG|ancestorG|dG|descendantG||descendantsG|g)lobal([ \t]+)(watched )*[ \t]*((([ \t]*)(([^,;\n$]+)[ \t]*)([ \t]*)(,*))+)/gm; //todo: make a more general/robust parsing that supports comma in strings, and multiline for functions
+			let globalsRE = /(^|;|\|\\n})([ \t]*(let|var|const)[ \t]+)*[ \t]*(watched )*[ \t]*(nsG|namespaceG|aG|ancestorG|dG|descendantG||descendantsG|g)lobal([ \t]+)(watched )*[ \t]*((([ \t]*)(([^,;\n$]+)[ \t]*)([ \t]*)(,*))+)/gim; //todo: make a more general/robust parsing that supports comma in strings, and multiline for functions
 			let match = globalsRE.exec(declareText);
 			let lastpos = 0;
 			while (match!= null) {
@@ -1288,44 +1458,71 @@
 					let declaration = tdeclarations[j].trim();
 					let tdeclaration = declaration.split("=");
 					let fullname = tdeclaration[0].trim();
-					let value = tdeclaration[1] || "undefined"
+					let value = tdeclaration[1] || "null"
+					let valueremove = false;
+					if (value=="null") {
+						valueremove = "'noop'";
+					}
 					let tfullname = fullname.split(/\./d);
-					let name = tfullname[0];
-					let alreadydeclaredtype = declared[name];
-					let dodeclare = !declared[name];
+					let name = tfullname[0];	
+					let dname = name, gname = name;						
+					let tnsname = name.split(/:/g);
+					let ns  = qnamespace;
+					if (tnsname.length>1) {
+						ns = "'"+tnsname[0]+"'"
+						if (tnsname.length>2) {
+							dname = tnsname[1];
+							name = name.substring(tnsname[0].length+tnsname[1].length+2)
+							gname = name;	
+						} else {
+							name = name.substring(tnsname[0].length+1)
+							dname = name;
+							gname = name;	
+						}
+					}					
+					let alreadydeclaredtype = declared[dname];
+					let dodeclare = !declared[dname];
 					if (alreadydeclaredtype) {
 						if (alreadydeclaredtype!=type) {
-							console.error(declare,name,"already defined with another global type")
-							letend = "throw '"+name+" already defined with another global type';"
+							console.error(declare,dname,"already defined with another global type")
+							letend = "throw '"+dname+" already defined with another global type';"
+						} else {
+							let o = otype[dname];
+							if (o) {
+								if (o.ns!=ns) {
+									console.error(declare,dname,"already defined with another namespace")
+									letend = "throw '"+dname+" already defined with another another namespace';"
+								}
+							}
 						}
 					} else {
-						declared[name] = type;
-						otype[name] = {}
+						declared[dname] = type;
+						otype[dname] = {ns}
 						if (watched) {
-							watchedvars[name] = type;
+							watchedvars[dname] = type;
 							haswatchedvars = true;
 						}
 					}
 					if (dodeclare) {
-						letstart += name;
+						letstart += dname;
 						switch (type) {
 							case "g":
-								letequals += "getGlobalShared" +  letequalsend + "('"+name+"');";
+								letequals += "getGlobalShared" +  letequalsend + "('"+gname+"');";
 								break;
-							case "n":
-								letequals += "getNamespaceShared" +  letequalsend + "('"+name+"',"+qnamespace+");";
+							case "n":	
+								letequals += "getNamespaceShared" +  letequalsend + "('"+gname+"',"+ns+");";
 								break;
 							case "d":
 								if (watched) {
-									letequals += "getSetProxy('"+name+"',{},currentElement);"
+									letequals += "getSetProxy('"+gname+"',{},currentElement);"
 								} else {
 									letequals = "= {};"
 								}
-								letequals += "(function() {let anc = "+AObjectName0+".__private.getPvAncGlobals(currentElement); if (anc."+name+") { "+name+".parent = anc."+name+".obj; "+name+".parentElement = anc."+name+".elem }; anc."+name+" = { obj : "+name+", elem : currentElement } } )();";
+								letequals += "(function() {let anc = "+AObjectName0+".__private.getPvAncGlobals(currentElement); if (anc."+gname+") { "+gname+".parent = anc."+gname+".obj; "+gname+".parentElement = anc."+gname+".elem }; anc."+gname+" = { obj : "+gname+", elem : currentElement } } )();";
 								hasancestorglobals = true;
 								break;
 							case "a": {
-								letequals = "="+AObjectName0+".getJSONPath("+AObjectName0+".__private.getPvAncGlobals(currentElement),'" + name + ".obj');if ("+name+"===undefined) { "+name+"={} };"; 
+								letequals = "="+AObjectName0+".getJSONPath("+AObjectName0+".__private.getPvAncGlobals(currentElement),'" + gname + ".obj');if ("+gname+"===undefined) { "+gname+"={} };"; 
 							}
 						}
 					} else {
@@ -1339,8 +1536,8 @@
 						letinit = "throw 'Cannot initialize the base object (i.e. everydeclaration that affects something should have a dot in the variable name)';";
 					}
 					if (tfullname.length>1) {
-						let path = fullname.substring(name.length+1);
-						letinit += AObjectName0 + ".getJSONPath("+name+",'"+path+"',"+value+");";
+						let path = fullname.substring(dname.length+1);
+						letinit += AObjectName0 + ".getJSONPath("+dname+",'"+path+"',"+value+","+valueremove+");";
 					}
 					txt += letinit;
 					
@@ -1352,7 +1549,7 @@
 			
 			declareText = txt;
 			txt = "";
-			let localsRE = /(^|;|\|\\n})((let|var|const)[ \t]+)*[ \t]*(watched )*[ \t]*(l)ocal([ \t]+)(watched )*[ \t]*((([ \t]*)(([^,;\n$]+)[ \t]*)([ \t]*)(,*))+)/gm; //todo: make a more general/robust parsing that supports comma in strings, and multiline for functions
+			let localsRE = /(^|;|\|\\n})([ \t]*(let|var|const)[ \t]+)*[ \t]*(watched )*[ \t]*(l)ocal([ \t]+)(watched )*[ \t]*((([ \t]*)(([^,;\n$]+)[ \t]*)([ \t]*)(,*))+)/gim; //todo: make a more general/robust parsing that supports comma in strings, and multiline for functions
 			match = localsRE.exec(declareText);
 			lastpos = 0;
 			while (match!= null) {
@@ -1372,7 +1569,7 @@
 					let declaration = tdeclarations[j].trim();
 					let tdeclaration = declaration.split("=");
 					let fullname = tdeclaration[0].trim();
-					let value = tdeclaration[1] || "undefined"
+					let value = tdeclaration[1] || "null"
 					let tfullname = fullname.split(/\./d);
 					let name = tfullname[0];
 					let alreadydeclaredtype = declared[name];
@@ -1434,7 +1631,9 @@
 				
 			if (haswatchedvars) {
 				txt += "(function(){" + strGetGetProxy + ";"
+				txt += "let __aw = " +AObjectName0+".__private.getAWatchedVars(currentScript);let __awo;"
 				for (let key in watchedvars) {
+					txt += "__awo = { obj : "+key+" };"
 					let type = watchedvars[key]
 					let pref = "";
 					if (type=="n"&&namespace) {
@@ -1450,7 +1649,7 @@
 					if (type=="a") {
 						evtobj = AObjectName0+".getJSONPath("+AObjectName0+".__private.getPvAncGlobals(currentElement),'" + key + ".elem')";
 					}
-					txt += key + "=getGetProxy('"+pref+key+"',"+key+","+evtobj+");"
+					txt += key + "=getGetProxy('"+pref+key+"',"+key+","+evtobj+");__awo.proxy = " + key +";__aw.set("+key+",__awo);"
 				}
 				txt += "})()"
 			}
@@ -1460,6 +1659,13 @@
 		return {watch, declaredbytype}
 	}
 
+	function warnTplLiteralPossiblePb(element,child) {
+			let pn = child.previousSibling;
+			let nn = child.nextSibling;
+			console.warn(element,child,"Warning: unparsed node. Any a-xxx HTML tag is usually sourrounded by parenthesis (simple, or double to allow HTML in content) to have A parse it. Like (TAG) / ((TAG)) or {(TAG)} / {(TAG))} for directly appending to " + AKeywords0.currentElement)
+			console.warn(getOuter(pn).txt  + "\n******POSSIBLE PROBLEM NODE HERE AFTER *******\n" + getOuter(child).txt + "\n******END POSSIBLE PROBLEM NODE *******\n" + getOuter(nn).txt )
+			console.log(element)		
+	}
 
 	function resolveChildrenAsTemplateLiterals(element,watched) {
 		let fullandwatched = false||watched;
@@ -1470,14 +1676,15 @@
 			}
 			let reTagName = /^[\w-]+$/
 			if (!reTagName.test(child.tagName)) {
-				console.warn(element,child,"Warning: Oddly named tag found. You may have written script that is missing a space between you < (less than) and the following character, or have forgottent to protect the line(s) with an unparse script tag")
-				console.log(element)
+				if (!child.tagName.startsWith("A:")) {
+					console.warn(element,child,"Warning: Oddly named tag found. You may have written script that is missing a space between you < (less than) and the following character, or have forgottent to protect the line(s) with an unparse script tag")
+					console.log(element)
+				}
 			}
 			let pn = child.previousSibling;
 			let nn = child.nextSibling;
 			if (pn==null||nn==null) {
-				console.warn(element,child,"Warning: unparsed node. Any a-xxx HTML tag is usually sourrounded by parenthesis (simple, or double to allow HTML in content) to have A parse it. Like (TAG) / ((TAG)) or {(TAG)} / {(TAG))} for directly appending to " + AKeywords0.currentElement)
-				console.log(element)
+				warnTplLiteralPossiblePb(element,child)
 				continue;
 			}
 			let allowhtml = false;
@@ -1526,90 +1733,236 @@
 					} else {
 						child.outerHTML = TLFC + addlines
 					}
+				} else {
+					warnTplLiteralPossiblePb(element,child)
 				}
+			} else {
+				warnTplLiteralPossiblePb(element,child)
+			}
+		}
+	}
+	
+	function importIn(elem,url,type,onloaded,removeAfterImport) {
+		let args = extractArgumentsByType(arguments)
+		elem = args.object[0];url = args.string[0];type = args.string[1];onloaded=args.function[0];removeAfterImport=args.boolean[0];
+		let mem = args.boolean[1];
+		if (!(elem instanceof HTMLElement)) {
+			if (removeAfterImport==undefined) removeAfterImport = true;
+			let elems = doc.querySelectorAll("aimporttarget")
+			for (let el of elems) {
+				if (el.innerHTML.trim().length==0) {
+					elem = el;
+					el.innerHTML="";
+					delete el.A;
+					break;
+				}
+			}
+			if (!(elem instanceof HTMLElement)) {
+				elem =  document.createElement("aimporttarget")
+				elem.style.display = "none"
+				doc.body.appendChild(elem);
+			}
+			(function() {
+				let lol = onloaded;
+				let le = elem;
+				function rem(elem) {
+					if (typeof(lol)=='function') { lol.apply(this,arguments) }
+					setTimeout(function() {
+							if (le.childNodes.length==0) {
+								le.remove()
+							}
+						},100);
+				}
+				onloaded = rem;
+			})();
+		}
+		let closure = document.createElement(ACustomElements0.AClosure)
+		let imp = document.createElement(AElements0.import)
+		imp.setAttribute("src",url);
+		if (type==undefined) type = "text/html"
+		imp.setAttribute("type",type)
+		if (removeAfterImport||mem) {
+			imp.setAttribute("mem","");
+		}
+		closure.appendChild(imp)
+		elem.insertBefore(closure,elem.firstChild);
+		if (removeAfterImport) {
+			initialized().then(() => {
+				return waitUntilAParsedIfExists(closure).then(() => { let ai = getAImported(closure);let pv = getPrivate(closure);pv.__script?.remove();closure.remove(); if (typeof(onloaded)=='function') onloaded(elem,url,type,ai,removeAfterImport); })
+			})
+		} else {
+			if (onloaded) {
+				return waitUntilAParsedIfExists(closure).then(() => { if (typeof(onloaded)=='function') onloaded(elem,url,type,removeAfterImport); })
+			}
+		}
+	}
+	A.importIn = importIn;
+
+	var elementImportSelector;
+	function rebaseimports(node,prefsrc) {
+		if (prefsrc==undefined) {
+			prefsrc = "";
+		}
+		if (elementImportSelector == undefined) elementImportSelector =  makeQuerySelectorForKeyWord(AElements.import);
+		let allimports = node.querySelectorAll(elementImportSelector);
+		for (let i=0;i<allimports.length;i++) {
+			let limport = allimports[i];
+			let src = getAttributeValue(limport,"src");
+			if (src!=null&&!src.startsWith("/")&&!src.startsWith("\\")) {
+				limport.setAttribute("src",prefsrc+src);
 			}
 		}
 	}
 
-	var elementImportSelector;
-	function parseAInnerTags(element,forcedATarget,watchchildren) {
+
+	function parseAInnerTags(element,forcedATarget,watchchildren,srcbase,opts) {
+		if (!opts) opts = {}
 		if (elementImportSelector == undefined) elementImportSelector =  makeQuerySelectorForKeyWord(AElements.import);
 		let ATarget = forcedATarget || getAElementTarget(element)
 		let allimports = element.querySelectorAll(elementImportSelector);
 		let promises = [];
 		let bwatch = false || watchchildren;
-		for (let i=0;i<allimports.length;i++) {
-			(function(){
-				let limport = allimports[i];
-				let lATarget = ATarget;
-				if (!limport._Aparsed ){
-					limport._Aparsed = true;
-					let type = getAttributeValueLC(limport,"type");
-					let src = getAttributeValue(limport,"src");
-					let promise = extFetch(src).then(resp => { 
-							if (resp.ok) { 
-								return resp.text();
-							} else {
-								return Promise.reject(resp.status);
-							}
-					}).then((txt) => {
-						if (type==null||type.indexOf("javascript")>=0||type.indexOf("json")>=0) {
-							let closure = getAttributeValueLC(limport,"closure");
-							closure = closure != null && closure != "false";
-								if (closure) {
-									txt = "(function(){" + txt + "})()";
+		resolveGlobalRunFirst(element,bwatch)
+		
+		let pimp = new Promise((resolve,reject) => {
+			function recurseAllImport() {
+				let allimports = element.querySelectorAll(elementImportSelector);
+				for (let i=0;i<allimports.length;i++) {
+					(function(){
+						let limport = allimports[i];
+						let lATarget = ATarget;
+						let lsrcbase = srcbase;
+						if (!limport._Aparsed ){
+							limport._Aparsed = true;
+							let type = getAttributeValueLC(limport,"type");
+							let src = getAttributeValue(limport,"src");
+							let mem = getAttributeValue(limport,"mem")!=null || opts.tagDef;
+							let promise = extFetch(src).then(resp => { 
+									if (resp.ok) { 
+										return resp.text();
+									} else {
+										return Promise.reject(resp.status);
+									}
+							}).then((txt) => {
+								let aimp;
+								if (mem) aimp = getAImported(element);
+								let newsrcbase = lsrcbase;
+								if (src) {
+									let pls = src.lastIndexOf("/")
+									if (pls>=0) {
+										let tmp = src.substring(0,pls+1)
+										if (newsrcbase) {
+											newsrcbase = tmp + newsrcbase;
+										} else {
+											newsrcbase = tmp;
+										}
+									}
 								}
-								if (txt!=undefined) {
-									limport.outerHTML="/*imported "+src+"*/\n" + txt + "\n/*end imported "+src+"*/";
-								} else {
-									limport.outerHTML="";
+								if (APostImportFetchJobs.length>0) {
+									for (let j=0;j<APostImportFetchJobs.length;j++) {
+										let job = APostImportFetchJobs[j]
+										if (job) {
+											let call = job.function
+											if (typeof(job)=='function') {
+												job = {function: job}
+												call = job;
+											}
+											if (typeof(call)=='function') {
+												let res = call.apply(limport,[txt])
+												if (typeof(res)=='string') {
+													txt = res;
+												}
+												if (typeof(res)=='object') {
+													if (res.txt) txt = res.txt;
+												}
+											}
+										}
+									}
 								}
-								return parseAInnerTags(element,forcedATarget)
-						} else {
-							if (txt!=undefined) {
-								if (type.indexOf("css")>=0) {
+								if (type==null||type.indexOf("javascript")>=0||type.indexOf("json")>=0) {
 									let closure = getAttributeValueLC(limport,"closure");
-									closure =  closure==null || closure != "false";
-									var style = document.createElement("style")
-									let limportinnerHTML = limport.innerHTML;
-									if (limportinnerHTML.trim().length>0) {
-										limportinnerHTML = "\n" + limportinnerHTML;
-									}
-									txt += limportinnerHTML;
+									closure = closure != null && closure != "false";
+									if (aimp) aimp.scripts.push(src);
 									if (closure) {
-										let _Astyle = "AStyle" + (AStyleClassCounter++);
-										lATarget.classList.add(_Astyle);
-										txt = "." + _Astyle + "{\n" + txt + "\n}";
+										txt = "(function(){" + txt + "})()";
 									}
-									style.classList.add(A._rndAClass);
-									style.innerHTML = txt;
-									lATarget.parentElement.insertBefore(style,lATarget);
+									if (txt!=undefined) {
+										let node = doc.createElement("span");
+										node.innerHTML = txt;
+										rebaseimports(node,newsrcbase)
+										limport.outerHTML="/*imported "+src+"*/\n" + txt + "\n/*end imported "+src+"*/";
+									} else {
+										limport.outerHTML="";
+									}
 								} else {
-									let limportinnerHTML = limport.innerHTML;
-									if (limportinnerHTML.trim().length>0) {
-										limportinnerHTML = "\n" + limportinnerHTML;
+									if (txt!=undefined) {
+										if (type.indexOf("css")>=0) {
+											let closure = getAttributeValueLC(limport,"closure");
+											closure =  closure==null || closure != "false";
+											var style = document.createElement("style")
+											let limportinnerHTML = limport.innerHTML;
+											if (limportinnerHTML.trim().length>0) {
+												limportinnerHTML = "\n" + limportinnerHTML;
+											}
+											txt += limportinnerHTML;
+											let _Astyle;
+											if (closure) {
+												_Astyle = "AStyle" + (AStyleClassCounter++);
+												if (!opts.tagDef) lATarget.classList.add(_Astyle);
+												txt = "." + _Astyle + "{\n" + txt + "\n}";
+											}
+											style.classList.add(A._rndAClass);
+											style.innerHTML = txt;
+											if (aimp) aimp.css.push({ src : src, obj: style, cls : _Astyle });
+											lATarget.parentElement.insertBefore(style,lATarget);
+										} else {
+											let limportinnerHTML = limport.innerHTML;
+											if (limportinnerHTML.trim().length>0) {
+												limportinnerHTML = "\n" + limportinnerHTML;
+											}
+											let node = doc.createElement("span");
+											node.innerHTML = txt + limportinnerHTML;
+											rebaseimports(node,newsrcbase)
+											let nodes = [];
+											if (!opts.tagDef) {
+												while (node.childNodes.length>0) {
+													let child = node.childNodes[0]
+													nodes.push(child);
+													ATarget.appendChild(child);
+												}
+											} else {
+												for (let i=0;i<node.childNodes.length;i++) {
+													nodes.push(node.childNodes[i])
+												}
+											}
+											if (aimp) aimp.html.push({ src, nodes });
+										}
 									}
-									let node = doc.createElement("span");
-									node.innerHTML = txt + limportinnerHTML;
-									for (const child of node.childNodes) {
-										ATarget.appendChild(child);
-									}
-								}
-							}
-							limport.outerHTML="";
-						}				
-					}).catch(err => { if (limport.parentElement) limport.outerHTML="" });
-					promises.push(promise)
+									limport.outerHTML="";
+								}	
+								allimports = element.querySelectorAll(elementImportSelector)
+								if (allimports.length==0) {
+									resolve();
+								} else {
+									recurseAllImport();
+								}			
+							}).catch(err => { console.error(err); if (limport.parentElement) limport.outerHTML="" });
+						}
+					})();
 				}
-			})();
-		}
+				allimports = element.querySelectorAll(elementImportSelector)
+				if (allimports.length==0) resolve();
+			}
+			recurseAllImport();
+		})
+		promises.push(pimp);
 		let promise = (function() {
 			let lbwatch = bwatch;
 			let lATarget = ATarget; 
 			let lelement = element;
 			let promise = Promise.all(promises).then(res => {
 				if (addSourceMaps) {
-					let srcmap = {"version":3,"sources":[".a-closure"],"names":[],"mappings":"AAAA","file":"test.js","sourcesContent":[]}
+					let srcmap = {"version":3,"sources":[".a-closure"],"names":[],"mappings":"AAAA","file":"src.js","sourcesContent":[]}
 					let srccontent = getSourceContent(lelement);
 					let lines = srccontent.txt.split(/\n/g);
 					let mappings = "AAAA";
@@ -1624,6 +1977,7 @@
 				let decls = resolveLetDeclarations(element,lbwatch);
 				lbwatch = decls.watch || lbwatch;
 				resolveAInnerTagsJobs(element,lbwatch)
+				resolveGlobalRunFirst(element,lbwatch)
 				resolveForEachOf(element,lbwatch)
 				resolveChildrenAsTemplateLiterals(element,lbwatch) 
 				if (decls.declaredbytype&&Object.keys(decls.declaredbytype.a).length>0) {
@@ -1753,18 +2107,53 @@
 	}
 	A.getNonATextContent = getNonATextContent;
 	
+	function removeNonATextContent(htmlAElement) {
+		for (let j=htmlAElement.childNodes.length-1;j>=0;j--) {
+			let child = htmlAElement.childNodes[j];
+			if (child.nodeType === Node.ELEMENT_NODE) {
+				if (child.classList.contains(A._rndAClass)) continue;
+				child.remove();
+		    } else if (child.nodeType === Node.TEXT_NODE || child.nodeType === Node.CDATA_SECTION_NODE) {
+				child.remove();
+		    }
+		}
+	}
+	A.removeNonATextContent = removeNonATextContent;
+	
+	function removeContent(htmlAElement) {
+		for (let j=htmlAElement.childNodes.length-1;j>=0;j--) {
+			let child = htmlAElement.childNodes[j];
+			child.remove();
+		}
+	}
+	A.removeContent = removeContent;
+	
 	function getSourceContent(htmlAElement) {
 		let txt = "";
-		for (const child of htmlAElement.childNodes) {
-			if (child.nodeType === Node.ELEMENT_NODE) {				
-		      	txt += child.outerHTML;
-		    } else if (child.nodeType === Node.TEXT_NODE || child.nodeType === Node.CDATA_SECTION_NODE) {
-				txt += child.textContent;
-		    }
+		if (htmlAElement&&htmlAElement.childNodes) {
+			for (const child of htmlAElement.childNodes) {
+				if (child.nodeType === Node.ELEMENT_NODE) {				
+			      	txt += child.outerHTML;
+			    } else if (child.nodeType === Node.TEXT_NODE || child.nodeType === Node.CDATA_SECTION_NODE) {
+					txt += child.textContent;
+			    }
+			}
 		}
 		return {txt};
 	}
 	A.getSourceContent = getSourceContent
+	
+	function getOuter(elem) {
+		let txt = "";
+		if (elem) {
+			if (elem.nodeType === Node.ELEMENT_NODE) {				
+		      	txt += elem.outerHTML;
+		    } else if (elem.nodeType === Node.TEXT_NODE || elem.nodeType === Node.CDATA_SECTION_NODE) {
+				txt += elem.textContent;
+		    }
+		}
+		return {txt};
+	}
 
 	let getABaseElementsIgnoreAttributes = {
 		"closure" : true
@@ -1783,7 +2172,7 @@
 					}
 					__privateWatchedInfos[name+'.'+prop] = { evtobj };
 					let res = Reflect.get(obj, prop, value,receiver);					
-					if (typeof(res)=='object') {
+					if (typeof(res)=='object'&&res!=null) {
 						res = getGetProxy(name + "." + prop,res,evtobj)
 					}	
 					return res;
@@ -1795,27 +2184,72 @@
 	}
 	var strGetGetProxy = getGetProxy.toString().replace(/__privateWatchedInfos/g,__privateWatchedInfosName).replace(/[\n\r]/g,"").replace(/([\t]|\s+)/g," ").replace(/;+/g,";");
 	
+	function extractArgumentsByType(args) {
+		let res = { "undefined" : [], "null" : [], "boolean" : [], "number" :[], "bigint" : [], "string" : [], "symbol" : [], "function" : [], "object" : []}
+		for (let arg of args) {
+			if (arg==null) {
+				res[null].push(arg)
+			} else {
+				res[typeof(arg)].push(arg)
+			}
+		}
+		return res;
+	}
+	A.extractArgumentsByType = extractArgumentsByType;
+	
 	function watch(f) {
-		let addevent = arguments[1];
+		let oargs = A.extractArgumentsByType(arguments);
+		let addevent = oargs.boolean[0];
+		let onok = oargs.function[1];
+		let onko = oargs.function[2];
 		let __privateWatchedInfosmem = __privateWatchedInfos;
 		__privateWatchedInfos = {};
 		let evtchangefs = f.evtchangefs || {}; 
 		if (addevent===false) {
 			evtchangefs = {};
 		}
-		let result = f(); 
+		let retval = { suspend : false };
+		let result;
+		try {
+			result = f(retval);
+			if (onok) onok(result,retval);
+		} catch(e) {
+			if (onko) {
+				onok(e);
+			} else{
+				throw e;
+			}
+		} 
+		retval.result = result;
 		let ce = currentElement;
 		let aw = window[_defaultAObjectName].__private.getAWatched(ce);
+		let lastrunspdde;
 		for (let key in __privateWatchedInfos) { 
 			(function() {
 				let lce = ce;
 				let okrun = true; 
 				let evtf = function() { 
+					if (retval.suspend==true) return;
 					if (okrun) { 
+						if (lastrunspdde!=undefined&&lastrunspdde==A.__private.__spdddeobj) {
+							return;
+						} else {
+							lastrunspdde=A.__private.__spdddeobj;
+						}
 						okrun = false; 
 						let __privateWatchedInfosmem = __privateWatchedInfos;
 						__privateWatchedInfos = {};  
-						f(); 
+						try {
+							retval.result = f(retval); 
+							if (onok) onok(retval.result,retval);
+						} catch(e) {
+							if (onko) {
+								onko(e,retval);
+							} else{
+								throw e;
+							}
+							okrun = true;
+						} 
 						for (let key in __privateWatchedInfos) { 
 							if (!evtchangefs[key]) { 
 								if (addevent!==false) __privateWatchedInfos[key].evtobj.addEventListener(key + ' change',evtf); 
@@ -1845,9 +2279,23 @@
 			f.evtchangefs = evtchangefs; 
 			aw.push(f);
 		}
-		return {result, evtchangefs}; 
+		retval.evtchangefs = evtchangefs;
+		return retval; 
 	};
-	var watchBody = getFunctionBody(watch).replace(/watchCleanEventDelay/g,watchCleanEventDelay).replace(/__privateWatchedInfos/g,__privateWatchedInfosName).replace(/\n|\r/g,"").replace(/([\t]|\s+)/g," ").replace(/;+/g,";");
+	var watchBody = getFunctionBody(watch).replace(/A\./g,AObjectName0 + ".").replace(/watchCleanEventDelay/g,watchCleanEventDelay).replace(/__privateWatchedInfos/g,__privateWatchedInfosName).replace(/\n|\r/g,"").replace(/([\t]|\s+)/g," ").replace(/;+/g,";");
+	
+	function copyHTMLandCSSMemImports(src,target) {
+		let mem = getAImported(src);
+		for (let o of mem.css) {
+			target.classList.add(o.cls);
+		}
+		for (let o of mem.html) {
+			for (let n of o.nodes) {
+				target.appendChild(n.cloneNode(true));	
+			}
+		}
+	}
+	A.copyHTMLandCSSMemImports = copyHTMLandCSSMemImports;
 	
 	function getABaseElements(htmlAElement,addclass,addclosure,options) {
 		let AText = getTextContent(htmlAElement).txt;
@@ -1906,8 +2354,8 @@
 			scriptTextEnd += ";})()";
 		}
 		
-		let watchNotWatched = "function watch(f) {f();};" 
-		let watchWatched = "let "+__privateWatchedInfosName+" = {};function watch(f) "+watchBody+";" 
+		let watchNotWatched = "function watch(f) {f();};function unwatch(obj) {return obj}" 
+		let watchWatched = "let "+__privateWatchedInfosName+" = {};function watch(f) "+watchBody+";function unwatch(obj) {let aw = " +AObjectName0+".__private.getAWatchedVars(currentScript); let awo = aw.get(obj);if (awo) obj = awo.obj; return obj}" 
 		let namespaceAStore = AKeywords0.AStore;
 
 		
@@ -1915,6 +2363,7 @@
 		if (options) {
 			if (options.tagDef) {
 				scriptTextStart += AObjectName0+".__private.getPrivate(" + AKeywords0.currentScript + ").__tagDefFct = function ("+AKeywords0.currentScript+","+AKeywords0.currentElement+","+AKeywords0.AStore+") {"
+				   + AObjectName0+".copyHTMLandCSSMemImports("+AObjectName0+".__private.getGlobalObject("+thisAId+"),currentElement);"
 				scriptTextEnd = ";};"+ AObjectName0+".__private.generateTagDef("+thisAId+"," + AKeywords0.currentScript + ","+scriptAId+"," + AKeywords0.currentElement + ","+ATargetAId+");" + scriptTextEnd;
 			}
 		}
@@ -1924,7 +2373,7 @@
 			scriptTextStart += defkw + " " + namespaceAStore + " = " + AKeywords0.currentElement + "."+namespaceAStore+"; if (" + namespaceAStore + "==undefined) { " +namespaceAStore + " = { __private : { __ascripts : [] }}; " + AKeywords0.currentElement + "."+namespaceAStore+" = "+namespaceAStore+"};"
 		}
 		scriptTextStart += "function " + AFunctions0.expose + "(arg1,arg2) { let exposeAStore = " + namespaceAStore + ";" + A.__private.exposeBody  + " };"+AObjectName0+".forEachKeyWord("+AObjectName0+".AFunctions.expose,name=>{AStore[name] = " + AFunctions0.expose + " });"
-		scriptTextStart += "function " + AFunctions0.injectFunction + "(f,bexpose,exposename) { let injectFunctionAStore = bexpose!=undefined ? bexpose : " + namespaceAStore + ";" + A.__private.injectFunctionBody  + " };"+AObjectName0+".forEachKeyWord("+AObjectName0+".AFunctions.injectFunction,name=>{AStore[name] = " + AFunctions0.injectFunction + " });"
+		scriptTextStart += "function " + AFunctions0.injectFunction + "(f,bexpose,exposename) { let injectFunctionAStore = bexpose===false ? null : " + namespaceAStore + ";" + A.__private.injectFunctionBody  + " };"+AObjectName0+".forEachKeyWord("+AObjectName0+".AFunctions.injectFunction,name=>{AStore[name] = " + AFunctions0.injectFunction + " });"
 		return {script, scriptAId, ATargetAId, AText, scriptTextStart, watchNotWatched, watchWatched , scriptTextEnd, ATarget, namespace}
 	} 
 
@@ -1933,8 +2382,9 @@
 	function generateTagDef(ascriptAId,script,scriptAId,elementTarget,elementTargetAId) {
 		let ascript = getGlobalObject(ascriptAId);
 		let fortag = getAAttribute(ascript,AAttributes.forTag);
-		let forattr = getAAttribute(ascript,AAttributes.forAttribute);
+		let forattr = getAAttribute(ascript,AAttributes.forAttribute)
 		if (forattr) {
+			foattr = forattr.toLowerCase();
 			let tforattr = forattr.split(/,/g);
 			forEachKeyWord(tforattr,function(kw) {
 				tagDefsFctsByAttrName[kw] = {scriptAId, ascriptAId, elementTargetAId}
@@ -1944,6 +2394,7 @@
 			})
 		}
 		if (fortag) {
+			fortag = fortag.toLowerCase()
 			let tfortag = fortag.split(/,/g);
 			let attachInternals = getAAttribute(ascript,AAttributes.attachInternals);
 			if (attachInternals!=null&&attachInternals!="false") {
@@ -1956,38 +2407,40 @@
 			if (aobservedAttributes&&aobservedAttributes.length>0) {
 				gobservedAttributes = aobservedAttributes.split(/,/g)
 			}
-			forEachKeyWord(tfortag,function(kw) {
-				if (!tagDefsFctsByTagName[kw]) {
-					let observedAttributes = JSON.parse(JSON.stringify(gobservedAttributes));
-					let customTagOptions = {scriptAId, ascriptAId, elementTargetAId, attachInternals, observedAttributes }
-					tagDefsFctsByTagName[kw] = customTagOptions
-					customElements.define(kw,class extends MyACustomTag{ 
-						static observedAttributes = customTagOptions.observedAttributes 
-						constructor() { 
-							super();
-							this.customTagOptions = customTagOptions; 
-							if (customTagOptions.attachInternals) { this.internals_ = this.attachInternals(); } 
-						}
-						attributeChangedCallback(name, oldValue, newValue) {
-						    if (typeof(this["on" + name + "AttributeChanged"])=="function") {
-								this["on" + name + "AttributeChanged"](oldValue,newValue);
+			waitUntilAParsedIfExists(ascript).then(function() {
+					forEachKeyWord(tfortag,function(kw) {
+						if (!tagDefsFctsByTagName[kw]) {
+							let observedAttributes = JSON.parse(JSON.stringify(gobservedAttributes));
+							let customTagOptions = {scriptAId, ascriptAId, elementTargetAId, attachInternals, observedAttributes };
+							tagDefsFctsByTagName[kw] = customTagOptions;
+							customElements.define(kw,class extends MyACustomTag{ 
+								static observedAttributes = customTagOptions.observedAttributes
+								constructor() { 
+									super();
+									this.customTagOptions = customTagOptions; 
+									if (customTagOptions.attachInternals) { this.internals_ = this.attachInternals(); } 
+								}
+								attributeChangedCallback(name, oldValue, newValue) {
+								    if (typeof(this["on" + name + "AttributeChanged"])=="function") {
+										this["on" + name + "AttributeChanged"](oldValue,newValue);
+									}
+								    if (typeof(this["onAttributeChanged"])=="function") {
+										this["onAttributeChanged"](name,oldValue,newValue);
+									}
+								}
+							});
+						} else {
+							tagDefsFctsByTagName[kw].scriptAId = scriptAId
+							tagDefsFctsByTagName[kw].ascriptAId = ascriptAId
+							tagDefsFctsByTagName[kw].elementTargetAId = elementTargetAId
+							tagDefsFctsByTagName[kw].attachInternals = attachInternals
+							tagDefsFctsByTagName[kw].observedAttributes.length=0;
+							for (let i=0;i<gobservedAttributes.length;i++) {
+								tagDefsFctsByTagName[kw].observedAttributes.push(gobservedAttributes[i])
 							}
-						    if (typeof(this["onAttributeChanged"])=="function") {
-								this["onAttributeChanged"](name,oldValue,newValue);
-							}
 						}
-					});
-				} else {
-					tagDefsFctsByTagName[kw].scriptAId = scriptAId
-					tagDefsFctsByTagName[kw].ascriptAId = ascriptAId
-					tagDefsFctsByTagName[kw].elementTargetAId = elementTargetAId
-					tagDefsFctsByTagName[kw].attachInternals = attachInternals
-					tagDefsFctsByTagName[kw].observedAttributes.length=0;
-					for (let i=0;i<gobservedAttributes.length;i++) {
-						tagDefsFctsByTagName[kw].observedAttributes.push(gobservedAttributes[i])
-					}
-				}
-			})
+					})
+				})
 		}
 		
 	}
@@ -2029,13 +2482,87 @@
 		}
 	}
 
+	function appendElement() {
+		let ignore = {tagName : true, content : true}
+		let elem,elem2;
+		let decl;
+		for (let arg of arguments) {
+			if (arg instanceof HTMLElement) {
+				if (!elem) {
+					elem = arg;
+				} else {
+					if (!elem2) elem2 = arg;
+				}
+			} else {
+				if (arg instanceof Node) {
+					if (!elem2) elem2 = arg;
+				} else {
+					if (typeof(arg)=="object"&&arg.tagName) {
+						decl =arg;
+					}
+				}
+			}
+		}
+		if (!decl) return;
+		if (!elem) elem = document.body;
+		let tagName = decl.tagName;
+		let el = document.createElement(tagName)
+		let c = decl.content;
+		if (c) {
+			el.innerHTML = c;
+		}
+		for (let key in decl) {
+			if (ignore[key]) continue;
+			el.setAttribute(key,decl[key])
+		}
+		if (elem2) {
+			elem.insertBefore(el,elem2);
+		} else {
+			elem.appendChild(el);
+		}
+	}
+	A.appendElement = appendElement;
+	
+	function tagDef(def) {
+		def.tagName = "a-tagDef"
+		def.redefine = "true"
+		appendElement(def)
+	}
+	A.tagDef = tagDef
+
+	function replayCustomTag(tag) {
+		if (!tag instanceof HTMLElement) return;
+		let pv = getPrivate(tag)
+		if (!pv._isACustomTag) return;
+		let nn = pv.__initState || document.createElement(tag.tagName);
+		nn[APrivateDataKeyWords._reqaID] = tag[APrivateDataKeyWords._aID]
+		let pe = tag.parentElement;
+		let ns = tag.nextSibling;
+		deleteGlobalObject(tag)
+		pe.insertBefore(nn,ns);
+	}
+	A.replayCustomTag = replayCustomTag;
+	
+	function replayCustomTagsByName(name) {
+		let els = document.querySelectorAll(name)
+		for (let el of els) {
+			replayCustomTag(el)
+		}
+	}
+	A.replayCustomTagsByName = replayCustomTagsByName;
+
 	function parseACustomTag(tagelement) {
 		let opts = tagelement.customTagOptions;
 		let closure = doc.createElement(ACustomElements0.AClosure);
 		for (let i=0;i<tagelement.attributes.length;i++) {
 			let name = tagelement.attributes[i].name;
 			closure.setAttribute(name,tagelement.getAttribute(name))
+			closure.__addSourceMaps = false;
 		}
+		if (keepCustomTagsInitState) {
+			getPrivate(tagelement).__initState = tagelement.cloneNode(true);
+		}
+		removeAAttribute(closure,AAttributes.singleton);
 		let decls = getPrivate(getGlobalObject(opts.ascriptAId)).decls
 		closure.innerHTML = AObjectName0 + ".__private.getPrivate("+AObjectName0 + ".__private.getGlobalObject("+opts.scriptAId+")).__tagDefFct("+AKeywords0.currentScript+","+AKeywords0.currentElement+","+AKeywords0.AStore+");"
 		if (decls.declaredbytype&&Object.keys(decls.declaredbytype.a).length>0) {
@@ -2049,41 +2576,236 @@
 	}
 
 	function waitUntilAParsedIfExists() {
+		let fargs = []
+		for (let i=0;i<arguments.length;i++) {
+			fargs.push(arguments[i]);
+		}
 		return (function() {
-			let args = []
-			for (let i=0;i<arguments.length;i++) {
-				args.push(argument[i]);
-			}
+			let args = fargs
 			return new Promise((resolve,reject) => {
 				if (args.length==0) {
 					resolve();
 					return;
 				}
-				function wait(count,lastargslength) {
+				function clearParsed(args) {
 					do {
 						let cur = args[0];
+						if (typeof(cur)=="string") {
+							if (!args.base) args.base = doc;
+							let temp = [];
+							try {
+								temp = args.base.querySelectorAll(cur)
+							} catch (e) {
+								args.length = 0;
+								reject(e);
+								return;
+							}
+							if (temp.length>0) {
+								cur = temp[0]
+								for (let i=temp.length-1;i>=1;i--) {
+									args.unshift(temp[i])
+								}
+							} else {
+								args.shift();
+								continue;								
+							}
+						}
 						if (cur instanceof HTMLElement) {
-							if (!cur.classList.contains(A._rndANotParsedClass)) {
-								
+							if (!cur.classList.contains(A._rndANotParsedClass)||cur.parentElement==null) {
+								args.shift();
+								args.base = cur;
+								continue;
+							} else {
+								return;
+							}
+						} else {
+							if (typeof(cur)=="object"&&typeof(cur.shift)=='function') {
+								if (cur.length>0) {
+									if (!cur.base) {
+										cur.base = args.base;
+									}
+									let l = cur.length;
+									clearParsed(cur)
+									if (cur.length>=l) {
+										return;
+									}
+								} else {
+									args.shift();
+									continue;
+								}
+							} else {
+								args.length = 0;
+								reject(cur)
 							}
 						}
 					} while (args.length>0);
+				}
+				
+				function wait(count,lastargslength) {
+					clearParsed(args)
 					if (args.length==0) {
 						resolve();
 						return;
 					} else {
-						if (arg.length==lastargslength) {
+						if (args.length==lastargslength) {
 							count++;
 						}
-						if (cout<10000) {
+						if (count<10000) {
 							setTimeout(() => { wait(count,args.length)},0);
 						} else {
 							reject();
 						}
 					}
 				}
+				setTimeout(() => { wait(0,args.length)},0);
 			})
 		})()
+	}
+	A.waitUntilAParsedIfExists = waitUntilAParsedIfExists;
+	
+	function addACustomTagFirstConnectedTask(tagName,task) {
+		let typeoftask = typeof(task);
+		if (typeoftask!="object"&&typeoftask!="function") return;
+		tagName = tagName.toUpperCase();
+		let tasks = ACustomTagFirstConnectedJobs[tagName]
+		if (!tasks) {
+			tasks = [];
+			ACustomTagFirstConnectedJobs[tagName] = tasks;
+		}
+		tasks.push(task)
+	}
+	A.addACustomTagFirstConnectedTask = addACustomTagFirstConnectedTask;
+	
+	function moveThis(data){  
+		let sel = data.selector || data; let base = data.dest || document;
+		let dest = base.querySelector(sel)
+		if (dest) { 
+			 	switch (data.position) {
+					 case "start":
+						 dest.insertBefore(this,dest.firstChild);
+						 break;
+					 case "before":
+						 dest.parentElement.insertBefore(this,dest);
+						 break;
+					 case "after":
+						 dest.parentElement.insertBefore(this,dest.nextSibling);
+						 break;
+					 default:
+						 dest.appendChild(this);
+				 } 
+		} 
+	}
+	
+	ConnectedJobsByType.waitFor = {
+		call : waitUntilAParsedIfExists,
+		args : ["data"]
+	}
+	ConnectedJobsByType.removeIf = {
+		call : (sel) => { if (document.querySelector(sel)) { this.remove(); } },
+		args : ["selector"]
+	}
+	ConnectedJobsByType.moveTo = {
+		call : moveThis,
+		args : ["data"]
+	}
+	
+	function waitUntilCustomTagTasksExecuted(gAthis,gtasks) {
+		if (gtasks&&gtasks.length>0) {
+			return (function() {
+				let tasks = gtasks;
+				let Athis = gAthis;
+				return new Promise((resolve,reject) => {
+					function unpiletasks(tasks) {
+						for (let i=0;i<tasks.length;i++) {
+							let task = tasks[i];
+							let typeoftask = typeof(task);
+							let call,args;
+							if (typeoftask=="object") {
+								let type = task.type;
+								let job = ConnectedJobsByType[type]
+								if (job) {
+									call = job.call
+									if (job.args&&job.args.length>0) {
+										args = [];
+										for (let j=0;j<job.args.length;j++) {
+											let aj = job.args[j];
+											let val = task[aj]
+											if (typeof(val)=='function') {
+												val = val.apply(Athis,task)
+											}
+											args.push(val);
+										}
+									}
+								}
+							}
+							if (typeoftask=="function") {
+								call = task;
+							}
+							if (call) {
+								try {
+									let res  = call.apply(Athis,args)
+									tasks.splice(0,i+1);
+									if (res instanceof Promise) {
+										res.then(() => {
+											unpiletasks(tasks);
+										})
+										return;
+									}
+								} catch (e) {
+									console.error(e);
+									reject(e);
+								}
+							}
+						}
+						resolve();
+					}
+					unpiletasks(tasks);
+				})
+			})()
+		} else {
+			return false;
+		}
+	}
+	
+	function manageWaitFor(AThis) {
+		let waitFor = getAAttribute(AThis,AAttributes.waitFor);
+			if (waitFor!=null) {
+				try {
+					waitFor = JSON.parse(waitFor)
+					return waitUntilAParsedIfExists(waitFor);
+				} catch(e) {
+					console.error("error waitFor",e,AThis)
+				}
+			}
+		return Promise.resolve(true);
+		
+	}
+	
+	function manageSingleton(AThis) {
+		let singleton = getAAttribute(AThis,AAttributes.singleton)
+		if (singleton!=null) {
+			if (singletonExist(singleton)) {
+				let singletonreplace = getAAttribute(AThis,AAttributes.singletonreplace)
+				if (singletonreplace!=null&&singletonreplace!="false") {				
+					if (singletonreplace=="existing") {
+						let existing = singletons.get(singleton);
+						let pe = existing.parentElement;
+						let insertBefore = existing.nextSibling
+						addSingleton(singleton,AThis)
+						waitUntilAParsedIfExists(AThis).then(()=> { pe.insertBefore(AThis,insertBefore) })
+					} else {
+						addSingleton(singleton,AThis)
+					}
+					return false;
+				} else {
+					AThis.remove();
+				}
+				return true;
+			} else {
+				addSingleton(singleton,AThis);
+			}
+		}
+		return false;
 	}
 
 	class MyACustomTag extends HTMLElement {
@@ -2101,7 +2823,22 @@
 		this.classList.add(A._rndANotParsedClass);
 		this[A._rndAClass] = true;
 		let Athis = this;
-	    requestAnimationFrame(() => { parseACustomTag(Athis)});
+		manageWaitFor(Athis).then(() => {
+			if (manageSingleton(Athis)) return;
+			let tagName = Athis.tagName;
+			tagName = tagName.toUpperCase();
+			let tasks = ACustomTagFirstConnectedJobs[tagName]
+			let wait = false;
+			if (tasks) {
+				wait = waitUntilCustomTagTasksExecuted(Athis,[...tasks]);
+			}
+			if (wait) {
+				requestAnimationFrame(() => { wait.then(() => {parseACustomTag(Athis)}).catch(() => {parseACustomTag(Athis)}) });
+			} else {
+		    	requestAnimationFrame(() => { parseACustomTag(Athis)});
+		    }
+		})
+		
 	  }
 	
 	  disconnectedCallback() {
@@ -2111,10 +2848,17 @@
 	  }
 	
 	}
+	function bytesToBase64(bytes) {
+	  const binString = Array.from(bytes, (byte) =>
+	    String.fromCodePoint(byte),
+	  ).join("");
+	  return btoa(binString);
+	}
 
 	let cleanGlobalObjectsOrphansId = -1;
 	function parseAScript(element,addclass,addclosure,options) {
 		let pe = element.parentElement;
+		if (pe==null) return;
 		if (pe.classList.contains(A._rndANotParsedClass)||pe.classList.contains(A._rndAParsedClass)) {
 			let pv = getPrivate(pe)
 			if (!pv._isACustomTag&&!pv._isAElementTarget)	return; //do not parse inside another AElement. This is full literal creation
@@ -2123,14 +2867,14 @@
 		if (addclass==undefined) addclass = false;
 		if (addclosure==undefined) addclosure = false;
 		if (cleanGlobalObjectsOrphansId<0&&AFirstRuntimeCleanDelay>=0&&(Date.now()-AFirstRunTime)>AFirstRuntimeCleanDelay) {
-			cleanGlobalObjectsOrphansId = setTimeout(() => { cleanGlobalObjectsOrphans(); cleanGlobalObjectsOrphansId = -1},0);
+			cleanGlobalObjectsOrphansId = setTimeout(() => { cleanGlobalObjectsOrphans(); cleanGlobalObjectsOrphansId = -1},100);
 		}
 		(function(){
 			let laddclass = addclass;
 			let laddclosure = addclosure;
 			let loptions = options;
 			let lelement = element;
-			parseAInnerTags(lelement).promise.then(res => {
+			parseAInnerTags(lelement,null,null,null,options).promise.then(res => {
 				let ABE = getABaseElements(lelement,laddclass,laddclosure,loptions)
 				let ATarget = ABE.ATarget;
 				let AAppliedTags = getAAppliedTags(ATarget);
@@ -2168,9 +2912,9 @@
 				scripttext += AText + ABE.scriptTextEnd;
 				if (addSourceMaps) {
 					let srcmap = getPrivate(lelement).__sourcemap;
-					if (srcmap) {
+					if (lelement.__addSourceMaps!==false&&srcmap&&srcmap.sourcesContent&&srcmap.sourcesContent.length>0&&srcmap.sourcesContent[0].trim()!="") {
 						srcmap.sources[0] = "a-closure."+lelement[APrivateDataKeyWords._aID]+".js";
-				 		scripttext += "\n//# sourceMappingURL=data:;base64," + btoa(JSON.stringify(srcmap))
+				 		scripttext += "\n//# sourceMappingURL=data:text/a-script;charset=utf-8;base64," + bytesToBase64(new TextEncoder().encode((JSON.stringify(srcmap))))
 				 	}
 				}
 				script.innerHTML = scripttext;
@@ -2199,11 +2943,15 @@
 		}
 		this[A._rndAClass] = true;
 		this.classList.add(A._rndANotParsedClass);
-		let ATarget = getAElementTarget(this)
 		let Athis = this;
-		ATarget.classList.add(A._rndANotParsedClass);
-		  
-	    requestAnimationFrame(() => { parseAScript(Athis)});
+		manageWaitFor(Athis).then(() => {
+			if (manageSingleton(Athis)) return;
+			let ATarget = getAElementTarget(Athis)
+			ATarget.classList.add(A._rndANotParsedClass);
+			  
+		    requestAnimationFrame(() => { parseAScript(Athis)});
+		})
+
 	  }
 	
 	  disconnectedCallback() {
@@ -2226,11 +2974,15 @@
 		}
 		this[A._rndAClass] = true;
 		this.classList.add(A._rndANotParsedClass);
-		let ATarget = getAElementTarget(this)
 		let Athis = this;
-		ATarget.classList.add(A._rndANotParsedClass);
-		  
-	    requestAnimationFrame(() => { parseAScript(Athis,false,true)});
+		manageWaitFor(Athis).then(() => {
+			if (manageSingleton(Athis)) return;
+			let ATarget = getAElementTarget(Athis)
+			ATarget.classList.add(A._rndANotParsedClass);
+			  
+		    requestAnimationFrame(() => { parseAScript(Athis,false,true)});
+			
+		})
 	  }
 	
 	  disconnectedCallback() {
@@ -2251,11 +3003,28 @@
 		if (this[A._rndAClass]) {
 			return;
 		}
+		let fortag = getAAttribute(this,AAttributes.forTag)
+		if (fortag) {
+			let isdefined = customElements.get(fortag)!=undefined
+			if (isdefined) {
+				let redef = getAAttribute(this,AAttributes.redefine)
+				redef = redef!=undefined&&redef!=="false"
+				if (!redef) {
+					this.remove();
+					return;
+				}
+			}
+		}
 		this.classList.add(A._rndANotParsedClass);
 		this[A._rndAClass] = true;
 		let Athis = this;
-		  
-	    requestAnimationFrame(() => { parseAScript(Athis,false,true,{ tagDef : true})});
+		manageWaitFor(Athis).then(() => {
+			if (manageSingleton(Athis)) return;
+			let pv = getPrivate(Athis);
+			pv.__ascriptadded = true; //no target add for tagdefs
+		    requestAnimationFrame(() => { parseAScript(Athis,false,true,{ tagDef : true})});
+		})
+		
 	  }
 	
 	  disconnectedCallback() {
@@ -2309,6 +3078,7 @@
 				createClass(kw,"display:none;")
 				customElements.define(kw,class extends MyATagDef{});
 			})
+			AIsInitialized = true;
 			AInitializedPromiseResolve(A);
 		} catch (e) {
 			AInitializedPromiseReject(e);
@@ -2347,6 +3117,18 @@
 					}
 					TemplateLiteralFullCreationJobs.push(tag)
 				}		
+			}
+			if (ext.PostImportFetchTasks) {
+				if (!ext.PostImportFetchTasks.length) {
+					ext.PostImportFetchTasks = [ext.PostImportFetchTasks]
+				}
+				for (let j=0;j<ext.PostImportFetchTasks.length;j++) {
+					let tag = ext.PostImportFetchTasks[j]
+					if (!tag.function) {
+						console.warn("extension script error: for a template tag extension, a {function} object is required",script)
+					}
+					APostImportFetchJobs.push(tag)
+				}	
 			}
 		}
 	}
