@@ -11,7 +11,7 @@ a.js is a lightweight and versatile JavaScript Flexwork/library designed for bui
 - Seamless integration with HTML and JavaScript ecosystems.
 
 ## getting started
-Download the [a.js source](main/a.js), set a <script src="path/to/a.js"></script> in the <head></head> of your HTML document, and you are ready to go. All you need is a browser, you don't even need to setup a web server at all.
+Download the [a.js source](main/a.js), set a `<script src="path/to/a.js"></script>` in the `<head></head>` of your HTML document, and you are ready to go. All you need is a browser, you don't even need to setup a web server at all.
 Of course, you can also use a.js on your live web site.
 
 Visit the [a.js web site](https://www.a-js.org/featuresindex.html) or read the [documentation here](documentation.md) to learn more.
