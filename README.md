@@ -19,5 +19,5 @@ Of course, you can also use a.js on your live web site.
 
 Visit the [a.js web site](https://www.a-js.org/featuresindex.html) or read the [documentation here](documentation.md) to learn more.
 
-You can also directly check the [online examples](https://www.a-js.org/examplesindex.html) 
+You can also directly check the [online examples](https://www.a-js.org/examplesindex.html) and download their code to experiment with them.
 
